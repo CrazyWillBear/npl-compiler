@@ -1,9 +1,9 @@
 """Command-line entry point for the ``nplc`` compiler.
 
-``nplc FILE.npl`` parses a single explicit-signature function, translates it via
-the configured :class:`~nplc.translator.Translator` (the deterministic
-:class:`~nplc.translator.StubTranslator` for now), validates the result, and
-writes the sibling ``FILE.py``.
+``nplc FILE.npl`` splits the source into an optional preamble plus ordered function
+units, translates each via the configured :class:`~nplc.translator.Translator` (the
+deterministic :class:`~nplc.translator.StubTranslator` for now) with the whole current
+generated ``.py`` as context, validates the result, and writes the sibling ``FILE.py``.
 """
 
 from __future__ import annotations
