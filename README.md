@@ -8,8 +8,12 @@ runnable Python (`.py`). See [`PRD.md`](./PRD.md) for the full design.
 > synonym (`def`, `function`, `func`, `fn`, `procedure`, `algorithm`) and a
 > `name(params):` signature, with indentation-delimited prose bodies, so control-flow
 > keywords (`if`/`for`/`while`) inside a body never start a new function. Each unit is
-> translated with the whole current generated `.py` as context, validated, and written
-> to an `ast`-valid sibling `FILE.py`. Translation runs through a model-agnostic
+> translated with the whole current generated `.py` as context, then `ast`-validated
+> before anything is written. Validation is syntax-only and all-or-nothing: if any
+> unit's translated output fails `ast.parse`, the compile fails hard — it names the
+> function, prints the `SyntaxError`, writes nothing (leaving any prior good `.py`
+> untouched), and does not retry; otherwise the validated whole is written to an
+> `ast`-valid sibling `FILE.py`. Translation runs through a model-agnostic
 > `Translator`; the default is a deterministic `StubTranslator` (the real Ollama
 > adapter and caching land in later slices).
 
