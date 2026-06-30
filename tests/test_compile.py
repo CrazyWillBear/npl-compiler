@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from nplc.cli import main
-from nplc.compiler import compile_file
+from nplc.compiler import compile_file, render_validated
 from nplc.translator import StubTranslator, Translator
 from nplc.unit import CompileError, FunctionUnit, parse_source
 
@@ -82,3 +82,102 @@ def test_compile_rejects_unparseable_python_and_writes_nothing(
         compile_file(source, BrokenTranslator())
 
     assert not (tmp_path / "broken.py").exists()
+
+
+def test_compile_failure_names_function_and_quotes_syntax_error(
+    tmp_path: Path,
+) -> None:
+    """A hard-fail message names the offending function and prints the SyntaxError."""
+    broken_python = "def (this is not python:::"
+    try:
+        ast.parse(broken_python)
+    except SyntaxError as exc:
+        syntax_message = str(exc)
+
+    class BrokenTranslator:
+        def translate(self, unit: FunctionUnit) -> str:
+            return broken_python
+
+    source = tmp_path / "broken.npl"
+    source.write_text(SINGLE_FUNCTION)
+
+    with pytest.raises(CompileError) as exc_info:
+        compile_file(source, BrokenTranslator())
+
+    message = str(exc_info.value)
+    assert "add" in message  # names the offending function
+    assert syntax_message in message  # surfaces the SyntaxError verbatim
+    assert isinstance(exc_info.value.__cause__, SyntaxError)
+
+
+def test_compile_does_not_retry_on_failure(tmp_path: Path) -> None:
+    """The translator is invoked exactly once per unit — no automatic retry."""
+
+    class CountingBrokenTranslator:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def translate(self, unit: FunctionUnit) -> str:
+            self.calls += 1
+            return "def (broken:::"
+
+    translator = CountingBrokenTranslator()
+    source = tmp_path / "broken.npl"
+    source.write_text(SINGLE_FUNCTION)
+
+    with pytest.raises(CompileError):
+        compile_file(source, translator)
+
+    assert translator.calls == 1
+
+
+def test_failed_compile_leaves_prior_good_py_byte_identical(tmp_path: Path) -> None:
+    """A failing compile never clobbers a previously written good ``.py``."""
+    source = tmp_path / "fn.npl"
+    source.write_text(SINGLE_FUNCTION)
+
+    target = compile_file(source, StubTranslator())
+    good_bytes = target.read_bytes()
+
+    class BrokenTranslator:
+        def translate(self, unit: FunctionUnit) -> str:
+            return "def (broken:::"
+
+    with pytest.raises(CompileError):
+        compile_file(source, BrokenTranslator())
+
+    assert target.read_bytes() == good_bytes
+
+
+def test_render_validated_is_atomic_across_multiple_functions() -> None:
+    """One bad function fails the whole batch and never returns partial output."""
+    first = FunctionUnit(signature="first(a)", body="return a")
+    second = FunctionUnit(signature="second(b)", body="return b")
+
+    class SelectiveTranslator:
+        """Valid Python for ``first``; un-parseable Python for ``second``."""
+
+        def translate(self, unit: FunctionUnit) -> str:
+            if unit.name == "second":
+                return "def (broken:::"
+            return StubTranslator().translate(unit)
+
+    with pytest.raises(CompileError) as exc_info:
+        render_validated([first, second], SelectiveTranslator())
+
+    # The gate names the *later* offending function, not the earlier good one.
+    assert "second" in str(exc_info.value)
+
+
+def test_render_validated_concatenates_valid_functions() -> None:
+    """When every unit parses, the gate returns the joined, ast-valid source."""
+    first = FunctionUnit(signature="first(a)", body="return a")
+    second = FunctionUnit(signature="second(b)", body="return b")
+
+    rendered = render_validated([first, second], StubTranslator())
+
+    tree = ast.parse(rendered)
+    names = {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    assert names == {"first", "second"}
