@@ -3,8 +3,11 @@
 A deterministic compiler that turns natural-language pseudocode (`.npl`) into
 runnable Python (`.py`). See [`PRD.md`](./PRD.md) for the full design.
 
-> Status: bootstrap skeleton. The CLI is wired up but compilation is not
-> implemented yet — `nplc FILE.npl` currently prints a placeholder notice.
+> Status: early slice. `nplc FILE.npl` compiles a file holding a single
+> explicit-signature function (`name(params):` + indented prose body) to an
+> `ast`-valid sibling `FILE.py`. Translation runs through a model-agnostic
+> `Translator`; the default is a deterministic `StubTranslator` (the real Ollama
+> adapter, multiple functions, preamble, and caching land in later slices).
 
 ## Development
 

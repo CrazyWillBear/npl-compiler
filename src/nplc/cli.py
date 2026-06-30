@@ -1,15 +1,21 @@
 """Command-line entry point for the ``nplc`` compiler.
 
-The real compiler is not implemented yet; this module provides the console-script
-seam so later slices have a stable place to hang argument parsing and dispatch.
+``nplc FILE.npl`` parses a single explicit-signature function, translates it via
+the configured :class:`~nplc.translator.Translator` (the deterministic
+:class:`~nplc.translator.StubTranslator` for now), validates the result, and
+writes the sibling ``FILE.py``.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
+from pathlib import Path
 
-NOT_IMPLEMENTED_NOTICE = "nplc: compiler not implemented yet"
+from nplc.compiler import compile_file
+from nplc.translator import StubTranslator
+from nplc.unit import CompileError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
         "source",
         nargs="?",
         metavar="FILE.npl",
-        help="pseudocode source file to compile (not implemented yet)",
+        help="pseudocode source file to compile",
     )
     return parser
 
@@ -34,9 +40,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         argv: Argument list to parse; defaults to ``sys.argv[1:]`` when ``None``.
 
     Returns:
-        The process exit code. Compilation is not implemented yet, so any
-        invocation prints a placeholder notice and exits cleanly with ``0``.
+        The process exit code: ``0`` on success (or when no source is given and
+        help is printed), ``1`` when compilation fails.
     """
-    build_parser().parse_args(argv)
-    print(NOT_IMPLEMENTED_NOTICE)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.source is None:
+        parser.print_help()
+        return 0
+    try:
+        target = compile_file(Path(args.source), StubTranslator())
+    except (CompileError, OSError) as exc:
+        print(f"nplc: {exc}", file=sys.stderr)
+        return 1
+    print(f"nplc: wrote {target}")
     return 0
