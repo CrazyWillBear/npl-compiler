@@ -28,8 +28,19 @@ DELIMITER_KEYWORDS: tuple[str, ...] = (
 )
 
 
+_EXPLICIT_DECLARATION = re.compile(r"\w+\s*\([^)]*\)")
+
+
 class CompileError(Exception):
     """Raised when a ``.npl`` source cannot be compiled to valid Python."""
+
+
+def _slug(text: str) -> str:
+    """Reduce prose to a usable Python identifier."""
+    slug = re.sub(r"\W+", "_", text.strip().lower()).strip("_")
+    if not slug:
+        return "unnamed"
+    return f"_{slug}" if slug[0].isdigit() else slug
 
 
 @dataclass(frozen=True)
@@ -45,21 +56,36 @@ class PreambleUnit:
 
 @dataclass(frozen=True)
 class FunctionUnit:
-    """A single pseudocode function: its signature and its prose body.
+    """A single pseudocode function: its declaration line and its prose body.
 
     Attributes:
-        signature: The ``name(params)`` text, without any delimiter keyword or
-            trailing colon.
+        declaration: The declaration text, without any delimiter keyword or trailing
+            colon. Either an explicit ``name(params)`` the author wrote, or a prose
+            name (``the average of some numbers``) whose real signature the model
+            infers during translation.
         body: The natural-language description of the function, dedented.
     """
 
-    signature: str
+    declaration: str
     body: str
 
     @property
+    def is_explicit(self) -> bool:
+        """Whether the author wrote a real ``name(params)`` signature."""
+        return _EXPLICIT_DECLARATION.fullmatch(self.declaration) is not None
+
+    @property
     def name(self) -> str:
-        """The function name parsed from the signature."""
-        return self.signature.split("(", 1)[0].strip()
+        """A Python identifier for this function, for prompts and error messages.
+
+        For an explicit declaration this is the author's function name. For a prose
+        declaration the model has not named the function yet, so the prose is slugged
+        into a placeholder identifier — the *canonical* name comes from the generated
+        ``def`` (see :func:`nplc.compiler.canonical_signature`).
+        """
+        if self.is_explicit:
+            return self.declaration.split("(", 1)[0].strip()
+        return _slug(self.declaration)
 
 
 # A parsed unit is either the optional preamble or one of the function units.
@@ -67,28 +93,36 @@ Unit = PreambleUnit | FunctionUnit
 
 
 def _function_def_pattern(delimiters: Sequence[str]) -> re.Pattern[str]:
-    """Build the column-zero ``[delimiter] name(params):`` recogniser.
+    """Build the column-zero ``[delimiter] declaration:`` recogniser.
 
-    The optional ``delim`` group matches only a configured synonym; an empty set
-    collapses to a never-matching alternation so the bare ``name(params):`` form
-    still works while no keyword is treated as a delimiter.
+    A declaration is either an explicit ``name(params)`` or a prose name. The optional
+    ``delim`` group matches only a configured synonym; an empty set collapses to a
+    never-matching alternation so the bare ``name(params):`` form still works while no
+    keyword is treated as a delimiter. The prose alternative excludes parentheses and
+    colons so it can never swallow an explicit signature or a trailing clause.
     """
     keywords = "|".join(re.escape(word) for word in delimiters) or r"(?!)"
     return re.compile(
         rf"^(?:(?P<delim>{keywords})\s+)?"
-        rf"(?P<signature>(?P<name>\w+)\s*\([^)]*\))\s*:\s*$"
+        rf"(?:(?P<signature>(?P<name>\w+)\s*\([^)]*\))|(?P<prose>[^():]+?))"
+        rf"\s*:\s*$"
     )
 
 
 def _match_function_def(line: str, pattern: re.Pattern[str]) -> re.Match[str] | None:
-    """Return the match if ``line`` opens a function, applying the control guard.
+    """Return the match if ``line`` opens a function, applying the control guards.
 
-    A bare ``name(params):`` whose name is a Python keyword (``if``/``for``/``while``
-    and friends) is control flow, not a definition, so it is rejected.
+    Two things are rejected. A bare ``name(params):`` whose name is a Python keyword
+    (``if``/``for``/``while`` and friends) is control flow, not a definition. And a
+    prose declaration without a delimiter keyword is ordinary text — prose is only a
+    function boundary when the author marked it with a synonym, otherwise every
+    unindented sentence ending in a colon would open a function.
     """
     match = pattern.match(line)
     if match is None:
         return None
+    if match.group("prose") is not None:
+        return match if match.group("delim") is not None else None
     if match.group("delim") is None and keyword.iskeyword(match.group("name")):
         return None
     return match
@@ -132,6 +166,7 @@ def parse_source(
         is_last = position + 1 == len(definitions)
         end = len(lines) if is_last else definitions[position + 1][0]
         body = textwrap.dedent("\n".join(lines[start + 1 : end])).strip("\n")
-        units.append(FunctionUnit(signature=match.group("signature"), body=body))
+        declaration = match.group("signature") or match.group("prose")
+        units.append(FunctionUnit(declaration=declaration.strip(), body=body))
 
     return units

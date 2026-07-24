@@ -61,10 +61,21 @@ def _build_prompt(unit: Unit, context: str) -> str:
             "Do not define any functions.\n\n"
             f"Description:\n{unit.body}"
         )
-    else:
+    elif unit.is_explicit:
         task = (
             "Write exactly one Python function with this signature:\n"
-            f"    def {unit.signature}:\n"
+            f"    def {unit.declaration}:\n"
+            "Give it a short docstring. Write no other top-level code.\n\n"
+            f"Description:\n{unit.body}"
+        )
+    else:
+        # No signature was written, so the model chooses the name and parameters; the
+        # compiler reads them back off the generated def as the canonical signature.
+        task = (
+            "Write exactly one Python function for the task described below. Choose a "
+            "descriptive snake_case name and whatever parameters the description "
+            "implies.\n"
+            f"The function should: {unit.declaration}\n"
             "Give it a short docstring. Write no other top-level code.\n\n"
             f"Description:\n{unit.body}"
         )
@@ -192,8 +203,12 @@ class StubTranslator:
         comment_lines = [f"    # {line}" for line in unit.body.splitlines()]
         if not comment_lines:
             comment_lines = ["    # (no body provided)"]
+        # A prose declaration has no parameters to copy, so the stub "infers" the
+        # slugged name and an empty list — enough for the compiler to read a canonical
+        # signature back off a real, parseable def.
+        signature = unit.declaration if unit.is_explicit else f"{unit.name}()"
         parts = [
-            f"def {unit.signature}:",
+            f"def {signature}:",
             *comment_lines,
             '    raise NotImplementedError("nplc stub translator")',
             "",

@@ -123,13 +123,31 @@ def test_response_without_the_expected_field_becomes_a_compile_error(
 def test_real_model_translates_a_function_to_valid_python() -> None:
     """The central mechanism, unmocked: real qwen2.5-coder emits parseable Python."""
     unit = FunctionUnit(
-        signature="add(a, b)", body="Return the sum of the two numbers a and b."
+        declaration="add(a, b)", body="Return the sum of the two numbers a and b."
     )
 
     source = OllamaTranslator().translate(unit, "")
 
     ast.parse(source)  # raises SyntaxError if the model produced junk
     assert "def add" in source
+
+
+@requires_ollama
+def test_real_model_infers_a_signature_from_prose(tmp_path: Path) -> None:
+    """A prose-only function compiles, and the model's inferred def lands in the .py."""
+    source = tmp_path / "avg.npl"
+    source.write_text(
+        "def compute the average of a list of numbers:\n"
+        "    add all the numbers together\n"
+        "    divide by how many numbers there are\n"
+    )
+
+    assert main([str(source)]) == 0
+
+    tree = ast.parse((tmp_path / "avg.py").read_text())
+    definitions = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+    assert len(definitions) == 1
+    assert definitions[0].args.args, "the model should have inferred a parameter"
 
 
 @requires_ollama

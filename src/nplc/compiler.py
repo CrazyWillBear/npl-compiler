@@ -48,6 +48,47 @@ def _unit_label(unit: Unit) -> str:
     return unit.name if isinstance(unit, FunctionUnit) else "preamble"
 
 
+def canonical_signature(unit: FunctionUnit, tree: ast.Module) -> str:
+    """Return the one signature that identifies ``unit``, explicit or inferred.
+
+    Every function has exactly one canonical signature regardless of how it was
+    written: the author's when they wrote one, otherwise the signature the model chose,
+    read back off the generated ``def``. Later slices key their cache on this, so it
+    must not depend on which form the author used.
+
+    Args:
+        unit: The function unit that was translated.
+        tree: The parsed module produced from that unit's translated Python.
+
+    Returns:
+        The ``name(params)`` text, without the ``def`` keyword or trailing colon.
+
+    Raises:
+        CompileError: If an inferred function's output does not hold exactly one
+            top-level function definition. Nested definitions are not counted, so a
+            closure inside the body is fine.
+    """
+    if unit.is_explicit:
+        return unit.declaration
+    definitions = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+    if not definitions:
+        raise CompileError(
+            f"{unit.name}: no function was inferred from the prose declaration "
+            f"{unit.declaration!r}"
+        )
+    if len(definitions) > 1:
+        names = ", ".join(node.name for node in definitions)
+        raise CompileError(
+            f"{unit.name}: inferred {len(definitions)} functions ({names}), "
+            "expected exactly one"
+        )
+    return f"{definitions[0].name}({ast.unparse(definitions[0].args)})"
+
+
 def render_validated(units: Iterable[Unit], translator: Translator) -> str:
     """Translate and ``ast``-validate every unit in order, returning the joined source.
 
@@ -74,10 +115,14 @@ def render_validated(units: Iterable[Unit], translator: Translator) -> str:
         context = "\n".join(generated_parts)
         python_source = translator.translate(unit, context)
         try:
-            ast.parse(python_source)
+            tree = ast.parse(python_source)
         except SyntaxError as exc:
             raise CompileError(
                 f"{_unit_label(unit)}: translated output is not valid Python: {exc}"
             ) from exc
+        if isinstance(unit, FunctionUnit):
+            # Derived for every function, inside the same all-or-nothing gate: an
+            # un-inferable function must fail the compile before anything is written.
+            canonical_signature(unit, tree)
         generated_parts.append(python_source)
     return "\n".join(generated_parts)
