@@ -1,9 +1,9 @@
 """Command-line entry point for the ``nplc`` compiler.
 
 ``nplc FILE.npl`` splits the source into an optional preamble plus ordered function
-units, translates each via the configured :class:`~nplc.translator.Translator` (the
-deterministic :class:`~nplc.translator.StubTranslator` for now) with the whole current
-generated ``.py`` as context, validates the result, and writes the sibling ``FILE.py``.
+units, translates each via :class:`~nplc.translator.OllamaTranslator` (a local Ollama
+server, the default backend) with the whole current generated ``.py`` as context,
+validates the result, and writes the sibling ``FILE.py``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from nplc.compiler import compile_file
-from nplc.translator import StubTranslator
+from nplc.translator import OllamaTranslator
 from nplc.unit import CompileError
 
 
@@ -49,7 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 0
     try:
-        target = compile_file(Path(args.source), StubTranslator())
+        target = compile_file(Path(args.source), OllamaTranslator())
     except (CompileError, OSError) as exc:
         print(f"nplc: {exc}", file=sys.stderr)
         return 1

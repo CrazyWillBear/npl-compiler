@@ -14,8 +14,20 @@ runnable Python (`.py`). See [`PRD.md`](./PRD.md) for the full design.
 > function, prints the `SyntaxError`, writes nothing (leaving any prior good `.py`
 > untouched), and does not retry; otherwise the validated whole is written to an
 > `ast`-valid sibling `FILE.py`. Translation runs through a model-agnostic
-> `Translator`; the default is a deterministic `StubTranslator` (the real Ollama
-> adapter and caching land in later slices).
+> `Translator`; the default backend is `OllamaTranslator`, prompting a local Ollama
+> server for real (caching lands in a later slice).
+
+## Requirements
+
+Compiling needs a local [Ollama](https://ollama.com) server with the model pulled:
+
+```sh
+ollama serve &
+ollama pull qwen2.5-coder
+```
+
+Both are configurable — `NPLC_OLLAMA_MODEL` (default `qwen2.5-coder`) and
+`NPLC_OLLAMA_URL` (default `http://localhost:11434`).
 
 ## Development
 
@@ -28,3 +40,7 @@ uv run mypy .
 ```
 
 Run the CLI with `uv run nplc --help`.
+
+The tests that exercise the real model skip automatically when no Ollama server with
+the default model is reachable, so the suite stays green without one; everything else
+runs against the deterministic `StubTranslator` test double.
