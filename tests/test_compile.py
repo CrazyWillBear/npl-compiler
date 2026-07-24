@@ -53,6 +53,17 @@ def _function_names(units: list[Unit]) -> list[str]:
     return [unit.name for unit in units if isinstance(unit, FunctionUnit)]
 
 
+@pytest.fixture(autouse=True)
+def stub_the_cli_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the CLI's default backend to the stub for this module.
+
+    These tests cover splitting, context assembly and the write/fail gate — not
+    translation quality — so they must stay fast and deterministic rather than call a
+    live model. The real backend is exercised in ``test_ollama.py``.
+    """
+    monkeypatch.setattr("nplc.cli.OllamaTranslator", StubTranslator)
+
+
 def test_cli_compiles_single_function_to_valid_python(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

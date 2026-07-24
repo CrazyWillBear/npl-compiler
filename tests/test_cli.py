@@ -50,7 +50,7 @@ def test_unparseable_output_exits_nonzero_and_names_function(
         def translate(self, unit: Unit, context: str) -> str:
             return "def (broken:::"
 
-    monkeypatch.setattr("nplc.cli.StubTranslator", BrokenStub)
+    monkeypatch.setattr("nplc.cli.OllamaTranslator", BrokenStub)
     source = tmp_path / "broken.npl"
     source.write_text("add(a, b):\n    return the sum\n")
 
