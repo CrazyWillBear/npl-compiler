@@ -58,8 +58,142 @@ PROSE_SOURCE = (
 )
 
 
+CACHE_SOURCE = (
+    "def alpha(x):\n    return x doubled\n\ndef beta(y):\n    return y tripled\n"
+)
+
+CACHE_SOURCE_WITH_PREAMBLE = "import the math module\n\n" + CACHE_SOURCE
+
+
 def _function_names(units: list[Unit]) -> list[str]:
     return [unit.name for unit in units if isinstance(unit, FunctionUnit)]
+
+
+class SpyTranslator:
+    """Stub translator that records which unit each call was for.
+
+    The cache is proven behaviorally: the stub's output is byte-stable, so a reused
+    function is indistinguishable in the ``.py`` from a re-translated one. What the
+    tests assert on is :attr:`translated` — who the compiler actually asked about.
+    """
+
+    def __init__(self) -> None:
+        self.translated: list[str] = []
+        self._stub = StubTranslator()
+
+    def translate(self, unit: Unit, context: str) -> str:
+        label = unit.name if isinstance(unit, FunctionUnit) else "preamble"
+        self.translated.append(label)
+        return self._stub.translate(unit, context)
+
+
+def _recompile(source: Path, edited: str | None = None) -> SpyTranslator:
+    """Rewrite ``source`` (optionally) and compile it, returning the spy translator."""
+    if edited is not None:
+        source.write_text(edited)
+    spy = SpyTranslator()
+    compile_file(source, spy)
+    return spy
+
+
+def test_second_compile_of_unchanged_input_calls_no_translator(tmp_path: Path) -> None:
+    """Unchanged input is fully cached: zero model calls, byte-identical output."""
+    source = tmp_path / "cache.npl"
+    source.write_text(CACHE_SOURCE)
+
+    first = _recompile(source)
+    first_bytes = (tmp_path / "cache.py").read_bytes()
+    second = _recompile(source)
+
+    assert first.translated == ["alpha", "beta"]
+    assert second.translated == []
+    assert (tmp_path / "cache.py").read_bytes() == first_bytes
+
+
+def test_body_edit_retranslates_only_that_function(tmp_path: Path) -> None:
+    """A body-only edit re-translates its own function and never a sibling."""
+    source = tmp_path / "cache.npl"
+    source.write_text(CACHE_SOURCE)
+    _recompile(source)
+
+    spy = _recompile(source, CACHE_SOURCE.replace("y tripled", "y multiplied by three"))
+
+    assert spy.translated == ["beta"]
+
+
+def test_signature_change_retranslates_the_function_and_its_siblings(
+    tmp_path: Path,
+) -> None:
+    """A changed signature cascades: siblings must see the new call shape."""
+    source = tmp_path / "cache.npl"
+    source.write_text(CACHE_SOURCE)
+    _recompile(source)
+
+    spy = _recompile(source, CACHE_SOURCE.replace("def beta(y):", "def beta(y, z):"))
+
+    assert sorted(spy.translated) == ["alpha", "beta"]
+
+
+def test_preamble_edit_retranslates_every_function(tmp_path: Path) -> None:
+    """Functions may reference the preamble's imports and constants, so it cascades."""
+    source = tmp_path / "cache.npl"
+    source.write_text(CACHE_SOURCE_WITH_PREAMBLE)
+    _recompile(source)
+
+    spy = _recompile(
+        source,
+        CACHE_SOURCE_WITH_PREAMBLE.replace("import the math module", "set PI to 3.14"),
+    )
+
+    assert sorted(spy.translated) == ["alpha", "beta", "preamble"]
+
+
+def test_inferred_signature_is_cached_across_compiles(tmp_path: Path) -> None:
+    """A prose signature round-trips through the ``.py``, so run two is free."""
+    source = tmp_path / "prose_cache.npl"
+    source.write_text(PROSE_SOURCE + "\ndef helper(n):\n    return n unchanged\n")
+    _recompile(source)
+
+    spy = _recompile(source)
+
+    assert spy.translated == []
+
+
+def test_unmarked_py_is_recompiled_and_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A hand-edited or reformatted ``.py`` loses the cache: recompile, and say so."""
+    source = tmp_path / "cache.npl"
+    source.write_text(CACHE_SOURCE)
+    _recompile(source)
+    target = tmp_path / "cache.py"
+    stripped = "\n".join(
+        line for line in target.read_text().splitlines() if "nplc:" not in line
+    )
+    target.write_text(stripped)
+    capsys.readouterr()
+
+    spy = _recompile(source)
+
+    assert spy.translated == ["alpha", "beta"]
+    assert "cache" in capsys.readouterr().err
+
+
+def test_damaged_cached_block_is_retranslated_and_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cached block that no longer parses is dropped rather than reused."""
+    source = tmp_path / "cache.npl"
+    source.write_text(CACHE_SOURCE)
+    _recompile(source)
+    target = tmp_path / "cache.py"
+    target.write_text(target.read_text().replace("def beta(y):", "def beta(:::"))
+    capsys.readouterr()
+
+    spy = _recompile(source)
+
+    assert spy.translated == ["beta"]
+    assert "cache" in capsys.readouterr().err
 
 
 @pytest.fixture(autouse=True)
@@ -387,6 +521,8 @@ def test_failed_compile_leaves_prior_good_py_byte_identical(tmp_path: Path) -> N
         def translate(self, unit: Unit, context: str) -> str:
             return "def (broken:::"
 
+    # Edit the body, or the cache would serve the function and never call the model.
+    source.write_text(SINGLE_FUNCTION.replace("the sum of", "the total of"))
     with pytest.raises(CompileError):
         compile_file(source, BrokenTranslator())
 
